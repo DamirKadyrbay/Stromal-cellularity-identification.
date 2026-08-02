@@ -1,0 +1,57 @@
+// Thresholds for classifying cells
+import qupath.lib.common.ColorTools
+
+double minImmuneCircularity = 0.9
+double maxImmuneCircularity = 1.0
+double minImmuneArea = 28.0
+double maxImmuneArea = 64.0
+double minValidNucleusArea = 10.0
+
+// Define classes
+def immuneClass = getPathClass("Immune cells")
+def fibroblastClass = getPathClass("Fibroblasts")
+def artifactClass = getPathClass("Too small for nucleus, may be artifact")
+
+// Get all detection objects (cells)
+def detections = getDetectionObjects()
+
+// Counters
+int immuneCount = 0
+int fibroblastCount = 0
+int artifactCount = 0
+int skippedCount = 0
+
+// Classify each cell
+detections.each { cell ->
+    def ml = cell.getMeasurementList()
+    def circularity = ml.getMeasurementValue("Nucleus: Circularity")
+    def nucleusArea = ml.getMeasurementValue("Nucleus: Area")
+
+    if (Double.isNaN(circularity) || Double.isNaN(nucleusArea)) {
+        // Mark skipped cell with black color
+        cell.setColorRGB(ColorTools.makeRGB(0, 0, 0))
+        skippedCount++
+        return
+    }
+
+    if (nucleusArea < minValidNucleusArea) {
+        cell.setPathClass(artifactClass)
+        artifactCount++
+    } else if (circularity >= minImmuneCircularity && circularity <= maxImmuneCircularity &&
+               nucleusArea >= minImmuneArea && nucleusArea <= maxImmuneArea) {
+        cell.setPathClass(immuneClass)
+        immuneCount++
+    } else {
+        cell.setPathClass(fibroblastClass)
+        fibroblastCount++
+    }
+}
+
+// Summary
+println "✅ Cell classification complete:"
+println "- Immune cells: ${immuneCount}"
+println "- Fibroblasts (including former unclassified): ${fibroblastCount}"
+println "- Too small / artifacts: ${artifactCount}"
+println "- Skipped (missing data): ${skippedCount}"
+
+fireHierarchyUpdate()
