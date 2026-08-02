@@ -1,0 +1,69 @@
+import qupath.lib.objects.PathAnnotationObject 
+import qupath.lib.roi.ROIs
+import java.awt.geom.Area
+
+double sideLength = 487.0  // µm
+
+// Find selected ROI (should be named "Most hypercellular area #1")
+def selected = getSelectedObject()
+if (selected == null || selected.getName() != "Most hypercellular area #1") {
+    print "Please select the annotation named 'Most hypercellular area #1'."
+    return
+}
+
+def roi = selected.getROI()
+def roiShape = roi.getShape()
+def plane = roi.getImagePlane()
+
+// Get all fibroblast detections
+def fibroblasts = getDetectionObjects().findAll {
+    it.getPathClass()?.getName() == "Fibroblasts"
+}
+
+// Slide square through the ROI
+def xStart = roi.getBoundsX()
+def yStart = roi.getBoundsY()
+def xEnd = xStart + roi.getBoundsWidth()
+def yEnd = yStart + roi.getBoundsHeight()
+
+def bestResult = null
+int maxCount = -1
+
+for (double x = xStart; x <= xEnd - sideLength; x += 20.0) {
+    for (double y = yStart; y <= yEnd - sideLength; y += 20.0) {
+
+        def square = ROIs.createRectangleROI(x, y, sideLength, sideLength, plane)
+        def area = new Area(roiShape)
+        area.intersect(new Area(square.getShape()))
+        if (area.isEmpty())
+            continue
+
+        def squareCount = fibroblasts.count {
+            def cx = it.getROI().getCentroidX()
+            def cy = it.getROI().getCentroidY()
+            return square.contains(cx, cy)
+        }
+
+        if (squareCount > maxCount) {
+            bestResult = [
+                x: x,
+                y: y,
+                roi: square,
+                count: squareCount
+            ]
+            maxCount = squareCount
+        }
+    }
+}
+
+if (bestResult != null) {
+    def annotation = new PathAnnotationObject(bestResult.roi)
+    annotation.setName("Most hypercellular area #1")
+    annotation.getMeasurementList().putMeasurement("Fibroblast count", bestResult.count)
+    addObject(annotation)
+    println "✅ Created annotation for most cellular region with ${bestResult.count} fibroblasts."
+} else {
+    println "⚠️ No suitable square region found inside ROI."
+}
+
+fireHierarchyUpdate()
