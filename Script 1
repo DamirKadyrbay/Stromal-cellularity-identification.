@@ -1,0 +1,110 @@
+import qupath.lib.objects.PathAnnotationObject
+import qupath.lib.roi.ROIs
+import java.awt.geom.Area
+import java.io.File
+import java.io.PrintWriter
+
+// Square parameters
+double squareSize = 3000.0
+double squareArea = squareSize * squareSize
+
+// Get selected ROI
+def selectedROI = getSelectedObject()
+if (selectedROI == null) {
+    println "❌ No ROI selected. Please select a merged stroma ROI."
+    return
+}
+
+def roi = selectedROI.getROI()
+def roiArea = roi.getArea()
+
+// Only fibroblast detections within ROI
+def fibroblasts = getDetectionObjects().findAll { cell ->
+    def isFibroblast = cell.getPathClass()?.getName() == "Fibroblasts"
+    if (!isFibroblast)
+        return false
+    def cx = cell.getROI().getCentroidX()
+    def cy = cell.getROI().getCentroidY()
+    return roi.contains(cx, cy)
+}
+
+// Define bounds
+def xStart = roi.getBoundsX()
+def yStart = roi.getBoundsY()
+def xEnd = xStart + roi.getBoundsWidth()
+def yEnd = yStart + roi.getBoundsHeight()
+
+int squareCount = 0
+def results = []
+
+for (double x = xStart; x < xEnd; x += squareSize) {
+    for (double y = yStart; y < yEnd; y += squareSize) {
+
+        def squareROI = ROIs.createRectangleROI(x, y, squareSize, squareSize, roi.getImagePlane())
+
+        if (!roi.getShape().intersects(squareROI.getShape().getBounds2D()))
+            continue
+
+        def intersection = new Area(roi.getShape())
+        intersection.intersect(new Area(squareROI.getShape()))
+        def intersectionBounds = intersection.getBounds2D()
+        def intersectionArea = intersectionBounds.width * intersectionBounds.height
+        if (intersectionArea == 0)
+            continue
+
+        def fibroblastCount = fibroblasts.count { cell ->
+            def cx = cell.getROI().getCentroidX()
+            def cy = cell.getROI().getCentroidY()
+            return squareROI.contains(cx, cy)
+        }
+
+        def density = fibroblastCount / intersectionArea
+
+        def annotation = new PathAnnotationObject(squareROI)
+        annotation.setName("Square ${++squareCount}")
+        annotation.getMeasurementList().putMeasurement("Fibroblast count", fibroblastCount)
+        annotation.getMeasurementList().putMeasurement("Stroma µm²", intersectionArea)
+        annotation.getMeasurementList().putMeasurement("Density (cells/µm²)", density)
+        addObject(annotation)
+
+        results << [
+            annotation: annotation,
+            squareNum: squareCount,
+            x: x,
+            y: y,
+            count: fibroblastCount,
+            area: intersectionArea,
+            density: density
+        ]
+    }
+}
+
+// Sort and rename
+def topSquares = results.sort { -it.count }.take(3)
+topSquares.eachWithIndex { entry, idx ->
+    entry.annotation.setName("Most hypercellular area #${idx + 1}")
+    entry.annotation.getMeasurementList().putMeasurement("Ranked Fibroblast count", entry.count)
+}
+
+// Global ROI summary
+def totalFibroblasts = fibroblasts.size()
+def globalAnnotation = new PathAnnotationObject(roi)
+globalAnnotation.setName("ROI summary")
+globalAnnotation.getMeasurementList().putMeasurement("Total fibroblasts", totalFibroblasts)
+globalAnnotation.getMeasurementList().putMeasurement("ROI stroma µm²", roiArea)
+globalAnnotation.getMeasurementList().putMeasurement("Overall Density (cells/µm²)", totalFibroblasts / roiArea)
+addObject(globalAnnotation)
+
+// Export CSV
+def path = buildFilePath(PROJECT_BASE_DIR, "fibroblast_square_analysis_9mm.csv")
+def file = new File(path)
+def writer = new PrintWriter(file)
+writer.println("Square,X,Y,Fibroblast count,Stroma µm²,Density (cells/µm²)")
+results.each { r ->
+    writer.println("${r.squareNum},${r.x},${r.y},${r.count},${r.area},${r.density}")
+}
+writer.close()
+println "✅ Exported CSV to: $path"
+
+println "✅ Done. Processed ${results.size()} squares."
+fireHierarchyUpdate()
